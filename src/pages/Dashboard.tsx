@@ -3,7 +3,8 @@ import {
   Wallet, LayoutDashboard, ListChecks, Users, Banknote, Receipt,
   Copy, Check, TrendingUp, Gift, ArrowUpRight, ArrowDownLeft,
   LogOut, Loader2, AlertCircle, Sparkles, Zap, Flame,
-  Share2, Crown, ShieldCheck, User,
+  Share2, Crown, ShieldCheck, User, Smartphone, Wifi, Ticket,
+  Headset,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { supabase, type Task, type TaskCompletion, type Transaction, type Withdrawal, type Referral } from '../lib/supabase';
@@ -13,13 +14,20 @@ import UpgradeProPage from './UpgradeProPage';
 import PaymentProPage from './Paymentpropage';
 import ConfirmPaymentPage, { type PaymentConfirmDetails } from './ConfirmPaymentPage';
 import ProfilePage from './Profilepage';
+import AirtimePage from './Airtimepage';
+import DataPage from './Datapage';
+import RedeemPage from './Redeempage';
+import BuyRedeemCodePage from './Buyredeemcodepage';
+import VoucherPaymentPage from './Voucherpaymentpage';
+import ConfirmVoucherPaymentPage, { type VoucherPaymentConfirmDetails } from './Confirmvoucherpaymentpage';
+import ContactSupportPage from './ContactSupportPage';
 import ActivityBadge from '../components/ActivityBadge';
 
 type DashboardProps = {
   onNavigate: (page: string) => void;
 };
 
-type Tab = 'overview' | 'tasks' | 'referrals' | 'withdrawals' | 'transactions' | 'upgrade' | 'payment' | 'confirm-payment' | 'profile';
+type Tab = 'overview' | 'tasks' | 'referrals' | 'withdrawals' | 'transactions' | 'upgrade' | 'payment' | 'confirm-payment' | 'profile' | 'airtime' | 'data' | 'redeem' | 'buy-redeem' | 'voucher-payment' | 'confirm-voucher-payment' | 'contact';
 
 export default function Dashboard({ onNavigate }: DashboardProps) {
   const { user, profile, signOut, refreshProfile } = useAuth();
@@ -240,6 +248,125 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     setActionLoading(false);
   }
 
+  // NOTE: requires a Supabase RPC function `purchase_airtime(p_network, p_phone, p_amount)`
+  // that debits `wallet_balance`, inserts a `transactions` row, and forwards the
+  // request to your airtime provider (VTU aggregator, etc). Returns { success, message }.
+  async function buyAirtime(network: string, phone: string, amount: number) {
+    if (!user) return;
+    setActionLoading(true);
+    const { data, error } = await supabase.rpc('purchase_airtime', {
+      p_network: network,
+      p_phone: phone,
+      p_amount: amount,
+    });
+
+    if (error || !data?.success) {
+      showToast('error', error?.message || data?.message || 'Could not purchase airtime.');
+    } else {
+      showToast('success', `₦${amount.toLocaleString()} ${network} airtime sent to ${phone}.`);
+      await Promise.all([loadData(), refreshProfile()]);
+    }
+    setActionLoading(false);
+  }
+
+  // NOTE: requires a Supabase RPC function `purchase_data(p_network, p_phone, p_plan_id, p_amount)`
+  // that debits `wallet_balance`, inserts a `transactions` row, and forwards the
+  // request to your data provider. Returns { success, message }.
+  async function buyData(network: string, phone: string, planId: string, amount: number) {
+    if (!user) return;
+    setActionLoading(true);
+    const { data, error } = await supabase.rpc('purchase_data', {
+      p_network: network,
+      p_phone: phone,
+      p_plan_id: planId,
+      p_amount: amount,
+    });
+
+    if (error || !data?.success) {
+      showToast('error', error?.message || data?.message || 'Could not purchase data.');
+    } else {
+      showToast('success', `Data plan sent to ${phone}.`);
+      await Promise.all([loadData(), refreshProfile()]);
+    }
+    setActionLoading(false);
+  }
+
+  // NOTE: requires a Supabase RPC function `redeem_code(p_code)` that validates
+  // the code against a `redeem_codes` table (code, amount, max_uses, used_count, expires_at),
+  // credits `wallet_balance`, inserts a `transactions` row, and marks the code used.
+  // Returns { success, message, amount }.
+  async function redeemCode(code: string) {
+    if (!user) return;
+    setActionLoading(true);
+    const { data, error } = await supabase.rpc('redeem_code', {
+      p_code: code.trim(),
+    });
+
+    if (error || !data?.success) {
+      showToast('error', error?.message || data?.message || 'Invalid or expired code.');
+    } else {
+      showToast('success', `Code redeemed! ₦${Number(data.amount).toLocaleString()} credited to your wallet.`);
+      await Promise.all([loadData(), refreshProfile()]);
+    }
+    setActionLoading(false);
+  }
+
+  // Selected voucher tier awaiting bank-transfer payment + admin review.
+  const [pendingVoucherTier, setPendingVoucherTier] = useState<{ value: number; price: number } | null>(null);
+  const [voucherPaymentSubmitted, setVoucherPaymentSubmitted] = useState(false);
+
+  const VOUCHER_BANK_DETAILS = {
+    bankName: 'Access Bank',
+    accountNumber: '1729650675',
+    accountName: 'Paschal Amobi Obulose',
+  };
+
+  function selectVoucherTier(tier: { value: number; price: number }) {
+    setPendingVoucherTier(tier);
+    setTab('voucher-payment');
+  }
+
+  // NOTE: requires a `voucher-receipts` storage bucket and a `voucher_payment_requests`
+  // table (user_id, full_name, amount_sent, reference, receipt_url, voucher_value,
+  // purchase_price, status, code, created_at) in Supabase. This only files the
+  // request for admin review — it does NOT generate or credit the redeem code by
+  // itself. Build an admin flow to verify the transfer, generate a code worth
+  // `voucher_value`, and deliver it to the user once approved.
+  async function submitVoucherPaymentProof(details: VoucherPaymentConfirmDetails) {
+    if (!user || !pendingVoucherTier) return;
+    setActionLoading(true);
+    try {
+      const ext = details.receiptFile.name.split('.').pop() || 'jpg';
+      const path = `${user.id}/${Date.now()}.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('voucher-receipts')
+        .upload(path, details.receiptFile);
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage.from('voucher-receipts').getPublicUrl(path);
+
+      const { error: insertError } = await supabase.from('voucher_payment_requests').insert({
+        user_id: user.id,
+        full_name: details.fullName,
+        amount_sent: details.amountSent ? parseFloat(details.amountSent) : pendingVoucherTier.price,
+        reference: details.reference || null,
+        receipt_url: urlData.publicUrl,
+        voucher_value: pendingVoucherTier.value,
+        purchase_price: pendingVoucherTier.price,
+        status: 'pending',
+      });
+      if (insertError) throw insertError;
+
+      showToast('success', 'Payment submitted! Your voucher code will be sent within 1 to 2 hours after review.');
+      setVoucherPaymentSubmitted(true);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not submit payment. Please try again.';
+      showToast('error', message);
+    }
+    setActionLoading(false);
+  }
+
   function copyReferralCode() {
     if (!profile) return;
     navigator.clipboard.writeText(profile.referral_code);
@@ -306,6 +433,13 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
               </div>
               <span className="text-sm font-medium text-slate-700">{profile?.username}</span>
             </div>
+            <button
+              onClick={() => setTab('contact')}
+              className="w-10 h-10 rounded-2xl text-slate-500 hover:bg-primary-50 hover:text-primary-600 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+              title="Contact support"
+            >
+              <Headset className="w-5 h-5" />
+            </button>
             <button onClick={signOut} className="w-10 h-10 rounded-2xl text-slate-500 hover:bg-red-50 hover:text-red-600 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500" title="Sign out">
               <LogOut className="w-5 h-5" />
             </button>
@@ -443,11 +577,13 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                       {[
                         { label: 'Complete Tasks', icon: ListChecks, action: () => setTab('tasks'), color: 'bg-primary-50 text-primary-700' },
                         { label: 'Refer Friends', icon: Share2, action: () => setTab('referrals'), color: 'bg-accent-50 text-accent-600' },
-                        { label: 'Get Withdrawal Code', icon: Banknote, action: () => setTab('withdrawals'), color: 'bg-orange-50 text-orange-600' },
+                        { label: 'Buy Airtime', icon: Smartphone, action: () => setTab('airtime'), color: 'bg-blue-50 text-blue-600' },
+                        { label: 'Buy Data', icon: Wifi, action: () => setTab('data'), color: 'bg-indigo-50 text-indigo-600' },
+                        { label: 'Redeem Code', icon: Ticket, action: () => setTab('redeem'), color: 'bg-purple-50 text-purple-600' },
                         { label: 'Withdraw Money', icon: ArrowUpRight, action: () => setTab('withdrawals'), color: 'bg-red-50 text-red-600' },
                         { label: 'View History', icon: Receipt, action: () => setTab('transactions'), color: 'bg-pink-50 text-pink-600' },
                         { label: 'Daily Bonus', icon: Gift, action: () => showToast('success', 'Daily bonus claimed! ₦50 credited.'), color: 'bg-amber-50 text-amber-600' },
-                        { label: 'Go Home', icon: LayoutDashboard, action: () => onNavigate('home'), color: 'bg-slate-100 text-slate-700' },
+                        { label: 'Contact Support', icon: Headset, action: () => setTab('contact'), color: 'bg-teal-50 text-teal-600' },
                       ].map((a) => (
                         <button
                           key={a.label}
@@ -655,6 +791,73 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
             {/* ===== PROFILE ===== */}
             {tab === 'profile' && <ProfilePage />}
+
+            {/* ===== AIRTIME ===== */}
+            {tab === 'airtime' && (
+              <AirtimePage
+                walletBalance={parseFloat(profile?.wallet_balance?.toString() || '0')}
+                actionLoading={actionLoading}
+                onSubmit={buyAirtime}
+                onBack={() => setTab('overview')}
+              />
+            )}
+
+            {/* ===== DATA ===== */}
+            {tab === 'data' && (
+              <DataPage
+                walletBalance={parseFloat(profile?.wallet_balance?.toString() || '0')}
+                actionLoading={actionLoading}
+                onSubmit={buyData}
+                onBack={() => setTab('overview')}
+              />
+            )}
+
+            {/* ===== REDEEM ===== */}
+            {tab === 'redeem' && (
+              <RedeemPage
+                actionLoading={actionLoading}
+                onSubmit={redeemCode}
+                onBack={() => setTab('overview')}
+                onNavigateToBuy={() => setTab('buy-redeem')}
+              />
+            )}
+
+            {/* ===== BUY REDEEM CODE ===== */}
+            {tab === 'buy-redeem' && (
+              <BuyRedeemCodePage
+                walletBalance={parseFloat(profile?.wallet_balance?.toString() || '0')}
+                onBuyClick={selectVoucherTier}
+                onBack={() => setTab('redeem')}
+              />
+            )}
+
+            {/* ===== VOUCHER PAYMENT (bank transfer) ===== */}
+            {tab === 'voucher-payment' && pendingVoucherTier && (
+              <VoucherPaymentPage
+                voucherValue={pendingVoucherTier.value}
+                purchasePrice={pendingVoucherTier.price}
+                bankDetails={VOUCHER_BANK_DETAILS}
+                onProceedToConfirm={() => { setVoucherPaymentSubmitted(false); setTab('confirm-voucher-payment'); }}
+                onCancel={() => { setPendingVoucherTier(null); setTab('buy-redeem'); }}
+              />
+            )}
+
+            {/* ===== CONFIRM VOUCHER PAYMENT ===== */}
+            {tab === 'confirm-voucher-payment' && pendingVoucherTier && (
+              <ConfirmVoucherPaymentPage
+                voucherValue={pendingVoucherTier.value}
+                purchasePrice={pendingVoucherTier.price}
+                actionLoading={actionLoading}
+                submitted={voucherPaymentSubmitted}
+                onSubmit={submitVoucherPaymentProof}
+                onBack={() => setTab(voucherPaymentSubmitted ? 'overview' : 'voucher-payment')}
+              />
+            )}
+
+            {/* ===== CONTACT SUPPORT ===== */}
+            {tab === 'contact' && (
+              <ContactSupportPage onBack={() => setTab('overview')} />
+            )}
 
             {/* ===== TRANSACTIONS ===== */}
             {tab === 'transactions' && (
