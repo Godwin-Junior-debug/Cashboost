@@ -61,15 +61,23 @@ export default function Footer({ onNavigate }: FooterProps) {
               <li><a href="#" className="hover:text-primary-400 transition-colors">About Us</a></li>
               <li><a href="#" className="hover:text-primary-400 transition-colors">Privacy Policy</a></li>
               <li><a href="#" className="hover:text-primary-400 transition-colors">Terms of Service</a></li>
-              <li><a href="#" className="hover:text-primary-400 transition-colors">Contact</a></li>
+              <li>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('contact')}
+                  className="hover:text-primary-400 transition-colors"
+                >
+                  Contact
+                </button>
+              </li>
             </ul>
           </div>
 
           <div>
             <h4 className="text-white font-semibold mb-4 text-sm uppercase tracking-wider">Get in Touch</h4>
             <ul className="space-y-3 text-sm">
-              <li className="flex items-center gap-2"><Mail className="w-4 h-4 text-primary-400" /> support@dailycash9ja.com</li>
-              <li className="flex items-center gap-2"><Phone className="w-4 h-4 text-primary-400" /> +234 800 000 0000</li>
+              <li className="flex items-center gap-2"><Mail className="w-4 h-4 text-primary-400" /> supportdailycash9ja@gmail.com</li>
+              <li className="flex items-center gap-2"><Phone className="w-4 h-4 text-primary-400" /> +234 810 698 3225</li>
               <li className="flex items-center gap-2"><MapPin className="w-4 h-4 text-primary-400" /> Lagos, Nigeria</li>
             </ul>
           </div>

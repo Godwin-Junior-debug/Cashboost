@@ -9,6 +9,7 @@ import ForgotPasswordPage from './pages/Forgotpasswordpage';
 import ResetPasswordPage from './pages/Resetpasswordpage';
 import Dashboard from './pages/Dashboard';
 import AdminDashboard from './pages/Admindashboard';
+import ContactSupportPage from './pages/ContactSupportPage';
 import { Loader2 } from 'lucide-react';
 
 function AppContent() {
@@ -79,6 +80,10 @@ function AppContent() {
   if (page === 'admin') {
     if (!user) return <AuthPage key="login" mode="login" onNavigate={setPage} />;
     return <AdminDashboard onNavigate={setPage} />;
+  }
+
+  if (page === 'contact') {
+    return <ContactSupportPage onBack={() => setPage('home')} />;
   }
 
   return (

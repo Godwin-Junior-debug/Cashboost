@@ -5,7 +5,7 @@ type ContactSupportPageProps = {
   onBack: () => void;
 };
 
-const SUPPORT_EMAIL = 'support@dailycash9ja.com';
+const SUPPORT_EMAIL = 'supportdailycash9ja@gmail.com';
 const WHATSAPP_NUMBER = '2348012345678'; // full intl format, no + or leading zeros
 const TELEGRAM_HANDLE = 'dailycash9ja';
 
@@ -84,12 +84,19 @@ export default function ContactSupportPage({ onBack }: ContactSupportPageProps) 
       icon: Mail,
       iconBg: 'bg-gradient-to-br from-orange-500 to-amber-600',
       title: 'Email Support',
-      description: 'Best for detailed inquiries or issues that need attachments or screenshots.',
+      description:
+        'Send us an email for account issues, payment inquiries, bug reports, or any detailed support request. You can also attach screenshots to help us resolve your issue faster.',
       badge: { label: '< 24 hrs', color: 'bg-amber-100 text-amber-700' },
       responseTime: 'Replies within 24 hours',
-      primaryAction: { label: SUPPORT_EMAIL, href: `mailto:${SUPPORT_EMAIL}` },
-      secondaryAction: { label: 'Copy email', onClick: () => copy(SUPPORT_EMAIL, 'email') },
-    },
+      primaryAction: {
+        label: SUPPORT_EMAIL,
+        href: `mailto:${SUPPORT_EMAIL}`,
+      },
+      secondaryAction: {
+        label: 'Copy email',
+        onClick: () => copy(SUPPORT_EMAIL, 'email'),
+      },
+},
   ];
 
   return (
