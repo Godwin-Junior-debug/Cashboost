@@ -29,6 +29,14 @@ type DashboardProps = {
 
 type Tab = 'overview' | 'tasks' | 'referrals' | 'withdrawals' | 'transactions' | 'upgrade' | 'payment' | 'confirm-payment' | 'profile' | 'airtime' | 'data' | 'redeem' | 'buy-redeem' | 'voucher-payment' | 'confirm-voucher-payment' | 'contact';
 
+// Shape returned by the get_task_rotation_state() RPC: a per-task multiplier
+// map plus how many seconds remain until the current 30-minute price bucket
+// rolls over (see current_rotation_bucket() in the DB).
+type RotationState = {
+  multipliers: Record<string, number>;
+  seconds_remaining: number;
+};
+
 export default function Dashboard({ onNavigate }: DashboardProps) {
   const { user, profile, signOut, refreshProfile } = useAuth();
   const [tab, setTab] = useState<Tab>('overview');
@@ -42,6 +50,13 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [paymentSubmitted, setPaymentSubmitted] = useState(false);
+
+  // Real rotation multipliers + countdown, replacing the old hardcoded
+  // rotationMultipliers={{}} / rotationSecondsRemaining={1800} placeholders.
+  const [rotationState, setRotationState] = useState<RotationState>({
+    multipliers: {},
+    seconds_remaining: 1800,
+  });
 
   // Withdrawal form
   const [withdrawForm, setWithdrawForm] = useState({
@@ -109,6 +124,32 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
+  // Pulls the live per-task rotation multipliers + seconds remaining in the
+  // current 30-min bucket from get_task_rotation_state(). Refreshed on mount
+  // and every 30s so it resyncs even if the local ticking countdown in
+  // TasksPage drifts, and re-fetched whenever tasks reload so brand-new
+  // tasks get a multiplier immediately.
+  const loadRotationState = useCallback(async () => {
+    if (!user) return;
+    const { data, error } = await supabase.rpc('get_task_rotation_state');
+    if (!error && data) {
+      setRotationState(data as RotationState);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+
+    async function tick() {
+      if (!cancelled) await loadRotationState();
+    }
+
+    tick();
+    const interval = setInterval(tick, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [user, loadRotationState]);
+
   const [verifyingTaskId, setVerifyingTaskId] = useState<string | null>(null);
 
   const cycleMultiplier = (cycle: number) => Math.pow(1.2, Math.max(cycle, 1) - 1);
@@ -136,7 +177,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       }
     } else {
       showToast('success', `Task completed! ₦${expectedReward.toLocaleString()} credited to your wallet.`);
-      await Promise.all([loadData(), refreshProfile()]);
+      await Promise.all([loadData(), refreshProfile(), loadRotationState()]);
     }
     setVerifyingTaskId(null);
   }
@@ -197,18 +238,64 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     setActionLoading(false);
   }
 
-  async function upgradeToPro() {
-    if (!user) return;
-    setActionLoading(true);
-    const { data, error } = await supabase.rpc('upgrade_to_pro');
-    if (error || !data?.success) {
-      showToast('error', error?.message || data?.message || 'Could not upgrade to Pro.');
-    } else {
-      showToast('success', 'Welcome to Pro! You now earn 1.5x on every task.');
-      await Promise.all([loadData(), refreshProfile()]);
+  // Paystack needs a numeric bank code, but WithdrawalsPage stores the bank as
+  // a display name (e.g. "Guaranty Trust Bank (GTBank)"), so map name -> code
+  // here before calling the edge function.
+  const BANK_CODES: Record<string, string> = {
+    'Access Bank': '044',
+    'Citibank Nigeria': '023',
+    'Ecobank Nigeria': '050',
+    'Fidelity Bank': '070',
+    'First Bank of Nigeria': '011',
+    'First City Monument Bank (FCMB)': '214',
+    'Globus Bank': '00103',
+    'Guaranty Trust Bank (GTBank)': '058',
+    'Heritage Bank': '030',
+    'Jaiz Bank': '301',
+    'Keystone Bank': '082',
+    'Kuda Bank': '50211',
+    'Moniepoint MFB': '50515',
+    'Opay': '999992',
+    'Palmpay': '999991',
+    'Parallex Bank': '104',
+    'Polaris Bank': '076',
+    'Premium Trust Bank': '105',
+    'Providus Bank': '101',
+    'Stanbic IBTC Bank': '221',
+    'Standard Chartered Bank': '068',
+    'Sterling Bank': '232',
+    'SunTrust Bank': '100',
+    'Titan Trust Bank': '102',
+    'Union Bank of Nigeria': '032',
+    'United Bank for Africa (UBA)': '033',
+    'Unity Bank': '215',
+    'Wema Bank': '035',
+    'Zenith Bank': '057',
+  };
+
+  // Calls the `clever-worker` Supabase Edge Function, which forwards the
+  // request to Paystack's "Resolve Account Number" API server-side (keeping
+  // the Paystack secret key out of the browser) and returns the real account
+  // holder's name for the given bank + account number.
+  // Wrapped in useCallback so it keeps a stable reference across renders —
+  // otherwise, since it's a dependency of the lookup effect in
+  // WithdrawalsPage, a new function identity on every render would keep
+  // re-triggering that effect in a loop.
+  const resolveAccount = useCallback(async (bankName: string, accountNumber: string): Promise<string | null> => {
+    const bankCode = BANK_CODES[bankName];
+    if (!bankCode) {
+      console.error('resolve-account: no bank code mapped for', bankName);
+      return null;
     }
-    setActionLoading(false);
-  }
+    const { data, error } = await supabase.functions.invoke('clever-worker', {
+      body: { bankCode, accountNumber },
+    });
+    if (error || data?.error) {
+      console.error('resolve-account error:', error || data?.error);
+      return null;
+    }
+    return data?.accountName ?? null;
+  }, []);
 
   // NOTE: requires a `payment-receipts` storage bucket and a `pro_payment_requests`
   // table (user_id, full_name, amount_sent, reference, receipt_url, status, created_at)
@@ -651,8 +738,8 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                 verifyingTaskId={verifyingTaskId}
                 taskCycle={profile?.task_cycle ?? 1}
                 nextRoundUnlockAt={profile?.next_round_unlock_at ?? null}
-                rotationMultipliers={{}}
-                rotationSecondsRemaining={1800}
+                rotationMultipliers={rotationState.multipliers}
+                rotationSecondsRemaining={rotationState.seconds_remaining}
                 completeTask={completeTask}
               />
             )}
@@ -754,8 +841,8 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                 setCodeInput={setCodeInput}
                 confirmWithdrawal={confirmWithdrawal}
                 cancelPendingWithdrawal={() => { setPendingWithdrawal(null); setCodeInput(''); }}
-                showToast={showToast}
                 onNavigateToPayment={() => setTab('payment')}
+                onResolveAccount={resolveAccount}
               />
             )}
 
@@ -799,6 +886,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                 actionLoading={actionLoading}
                 onSubmit={buyAirtime}
                 onBack={() => setTab('overview')}
+                onNavigateToPayment={() => setTab('payment')}
               />
             )}
 
@@ -809,6 +897,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                 actionLoading={actionLoading}
                 onSubmit={buyData}
                 onBack={() => setTab('overview')}
+                onNavigateToPayment={() => setTab('payment')}
               />
             )}
 

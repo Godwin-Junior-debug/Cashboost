@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowLeft, Smartphone, Loader2, Wallet } from 'lucide-react';
+import { ArrowLeft, Smartphone, Loader2, Wallet, KeyRound } from 'lucide-react';
 
 type Network = 'MTN' | 'Glo' | 'Airtel' | '9mobile';
 
@@ -8,6 +8,11 @@ type AirtimePageProps = {
   actionLoading: boolean;
   onSubmit: (network: string, phone: string, amount: number) => Promise<void>;
   onBack: () => void;
+  onNavigateToPayment?: () => void;
+  // Optional: wire this to your OTP/verification endpoint. If omitted, a
+  // local mock is used so the flow still works end-to-end.
+  onRequestCode?: (phone: string) => Promise<void>;
+  onVerifyCode?: (phone: string, code: string) => Promise<boolean>;
 };
 
 const NETWORKS: { id: Network; color: string }[] = [
@@ -19,18 +24,55 @@ const NETWORKS: { id: Network; color: string }[] = [
 
 const QUICK_AMOUNTS = [100, 200, 500, 1000, 2000, 5000];
 
-export default function AirtimePage({ walletBalance, actionLoading, onSubmit, onBack }: AirtimePageProps) {
+export default function AirtimePage({
+  walletBalance,
+  actionLoading,
+  onSubmit,
+  onBack,
+  onNavigateToPayment,
+  onRequestCode,
+  onVerifyCode,
+}: AirtimePageProps) {
   const [network, setNetwork] = useState<Network>('MTN');
   const [phone, setPhone] = useState('');
   const [amount, setAmount] = useState('');
   const [error, setError] = useState('');
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError('');
+  // Verification flow state
+  const [codeSent, setCodeSent] = useState(false);
+  const [codeVerified, setCodeVerified] = useState(false);
+  const [requestingCode, setRequestingCode] = useState(false);
+  const [verifyingCode, setVerifyingCode] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [codeError, setCodeError] = useState('');
 
-    const numericAmount = parseFloat(amount);
-    if (!/^0\d{10}$/.test(phone.trim())) {
+  const phoneValid = /^0\d{10}$/.test(phone.trim());
+  const numericAmount = parseFloat(amount);
+  const amountValid = !isNaN(numericAmount) && numericAmount >= 50 && numericAmount <= walletBalance;
+  const readyForVerification = phoneValid && amountValid;
+
+  // Any edit to phone/amount after a code was sent invalidates it, so the
+  // user has to re-verify against the details they're actually submitting.
+  function updatePhone(value: string) {
+    setPhone(value);
+    setCodeSent(false);
+    setCodeVerified(false);
+    setOtp('');
+    setCodeError('');
+  }
+
+  function updateAmount(value: string) {
+    setAmount(value);
+    setCodeSent(false);
+    setCodeVerified(false);
+    setOtp('');
+    setCodeError('');
+  }
+
+  async function handleGetCode() {
+    setError('');
+    setCodeError('');
+    if (!phoneValid) {
       setError('Enter a valid 11-digit phone number (e.g. 08012345678).');
       return;
     }
@@ -40,6 +82,70 @@ export default function AirtimePage({ walletBalance, actionLoading, onSubmit, on
     }
     if (numericAmount > walletBalance) {
       setError('Insufficient wallet balance.');
+      return;
+    }
+
+    setRequestingCode(true);
+    try {
+      if (onRequestCode) {
+        await onRequestCode(phone.trim());
+      } else {
+        // Local mock so the UI works before a real OTP endpoint is wired up.
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      }
+      setCodeSent(true);
+    } catch {
+      setCodeError('Could not send verification code. Try again.');
+    } finally {
+      setRequestingCode(false);
+    }
+  }
+
+  async function handleVerifyCode() {
+    setCodeError('');
+    if (otp.trim().length < 4) {
+      setCodeError('Enter the DailyCash Naija code we sent you.');
+      return;
+    }
+    setVerifyingCode(true);
+    try {
+      let ok = true;
+      if (onVerifyCode) {
+        ok = await onVerifyCode(phone.trim(), otp.trim());
+      } else {
+        // Local mock: any 4-6 digit code passes.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      if (ok) {
+        setCodeVerified(true);
+      } else {
+        setCodeError('Incorrect code. Try again.');
+      }
+    } catch {
+      setCodeError('Could not verify code. Try again.');
+    } finally {
+      setVerifyingCode(false);
+    }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError('');
+
+    if (!phoneValid) {
+      setError('Enter a valid 11-digit phone number (e.g. 08012345678).');
+      return;
+    }
+    if (isNaN(numericAmount) || numericAmount < 50) {
+      setError('Minimum airtime purchase is ₦50.');
+      return;
+    }
+    if (numericAmount > walletBalance) {
+      setError('Insufficient wallet balance.');
+      return;
+    }
+    if (!codeVerified) {
+      setError('Get and verify your code before buying airtime.');
       return;
     }
 
@@ -98,7 +204,7 @@ export default function AirtimePage({ walletBalance, actionLoading, onSubmit, on
           <input
             type="tel"
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            onChange={(e) => updatePhone(e.target.value)}
             placeholder="08012345678"
             maxLength={11}
             className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary-500 text-sm"
@@ -112,7 +218,7 @@ export default function AirtimePage({ walletBalance, actionLoading, onSubmit, on
               <button
                 key={a}
                 type="button"
-                onClick={() => setAmount(a.toString())}
+                onClick={() => updateAmount(a.toString())}
                 className={`py-2 rounded-xl border text-sm font-semibold transition-colors ${
                   amount === a.toString()
                     ? 'bg-primary-600 text-white border-primary-600'
@@ -126,7 +232,7 @@ export default function AirtimePage({ walletBalance, actionLoading, onSubmit, on
           <input
             type="number"
             value={amount}
-            onChange={(e) => setAmount(e.target.value)}
+            onChange={(e) => updateAmount(e.target.value)}
             placeholder="Enter custom amount"
             className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary-500 text-sm"
           />
@@ -134,9 +240,49 @@ export default function AirtimePage({ walletBalance, actionLoading, onSubmit, on
 
         {error && <p className="text-sm text-red-600 font-medium">{error}</p>}
 
+        {/* Verification step: appears once phone + amount look valid */}
+        {readyForVerification && !codeVerified && (
+          <div className="space-y-2 border-t border-slate-100 pt-4">
+            <label className="block text-sm font-semibold text-slate-700">Enter DailyCash Naija code</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={otp}
+                onChange={(e) => setOtp(e.target.value)}
+                placeholder={codeSent ? 'Enter DailyCash Naija code' : 'Tap "Get code" to receive your code'}
+                maxLength={10}
+                className="flex-1 px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary-500 text-sm"
+              />
+              <button
+                type="button"
+                onClick={handleGetCode}
+                disabled={requestingCode}
+                className="px-4 py-3 rounded-xl bg-gradient-to-r from-primary-600 to-accent-500 text-white font-semibold text-xs sm:text-sm hover:shadow-glow transition-all disabled:opacity-60 flex items-center gap-2 whitespace-nowrap"
+              >
+                {requestingCode ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
+                {requestingCode ? 'Sending...' : codeSent ? 'Resend' : 'Get code'}
+              </button>
+            </div>
+            {codeSent && (
+              <p className="text-xs text-slate-500">
+                DailyCash Naija code sent to {phone.trim()}.{' '}
+                <button
+                  type="button"
+                  onClick={handleVerifyCode}
+                  disabled={verifyingCode || !otp.trim()}
+                  className="font-semibold text-primary-600 hover:text-primary-700 disabled:opacity-60 disabled:hover:text-primary-600"
+                >
+                  {verifyingCode ? 'Verifying...' : 'Verify code'}
+                </button>
+              </p>
+            )}
+            {codeError && <p className="text-sm text-red-600 font-medium">{codeError}</p>}
+          </div>
+        )}
+
         <button
           type="submit"
-          disabled={actionLoading}
+          disabled={actionLoading || !codeVerified}
           className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-gradient-to-r from-primary-600 to-accent-500 text-white font-bold text-sm hover:shadow-glow hover:scale-[1.01] active:scale-[0.99] transition-all disabled:opacity-60 disabled:hover:scale-100"
         >
           {actionLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Smartphone className="w-5 h-5" />}

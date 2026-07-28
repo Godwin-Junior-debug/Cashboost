@@ -1,6 +1,6 @@
-import { useState, type Dispatch, type SetStateAction, type FormEvent } from 'react';
+import { useState, useEffect, type Dispatch, type SetStateAction, type FormEvent } from 'react';
 import { type Profile, type Withdrawal } from '../lib/supabase';
-import { Banknote, Loader2, Check, AlertCircle } from 'lucide-react';
+import { Banknote, Loader2, Check, AlertCircle, UserCheck } from 'lucide-react';
 
 const NIGERIAN_BANKS = [
   'Access Bank',
@@ -57,8 +57,12 @@ type WithdrawalsPageProps = {
   setCodeInput: Dispatch<SetStateAction<string>>;
   confirmWithdrawal: (e: FormEvent) => Promise<void>;
   cancelPendingWithdrawal: () => void;
-  showToast: (type: 'success' | 'error', msg: string) => void;
   onNavigateToPayment?: () => void;
+  // Optional: wire this to your bank account resolution endpoint (e.g. a
+  // Paystack/Flutterwave "resolve account number" call). Should resolve to
+  // the account holder's name, or null/throw if it can't be resolved. If
+  // omitted, a local mock is used so the flow still works end-to-end.
+  onResolveAccount?: (bankName: string, accountNumber: string) => Promise<string | null>;
 };
 
 export default function WithdrawalsPage({
@@ -74,10 +78,65 @@ export default function WithdrawalsPage({
   setCodeInput,
   confirmWithdrawal,
   cancelPendingWithdrawal,
-  showToast,
   onNavigateToPayment,
+  onResolveAccount,
 }: WithdrawalsPageProps) {
   const [showCodeError, setShowCodeError] = useState(false);
+  const [resolvingAccount, setResolvingAccount] = useState(false);
+  const [accountResolved, setAccountResolved] = useState(false);
+  const [resolveError, setResolveError] = useState('');
+
+  const { bankName, accountNumber } = withdrawForm;
+
+  // Auto-verify the account number against the selected bank once it looks
+  // like a complete NUBAN (10 digits), and fill in the account name. Debounced
+  // so we don't fire a lookup on every keystroke.
+  useEffect(() => {
+    setAccountResolved(false);
+    setResolveError('');
+
+    if (!bankName || !/^\d{10}$/.test(accountNumber.trim())) {
+      setWithdrawForm((prev) => ({ ...prev, accountName: '' }));
+      return;
+    }
+
+    let cancelled = false;
+    setResolvingAccount(true);
+
+    const timer = setTimeout(async () => {
+      try {
+        let name: string | null;
+        if (onResolveAccount) {
+          name = await onResolveAccount(bankName, accountNumber.trim());
+        } else {
+          // Local mock so the UI works before a real resolver is wired up.
+          await new Promise((resolve) => setTimeout(resolve, 900));
+          name = 'JOHN A. DOE';
+        }
+        if (cancelled) return;
+        if (name) {
+          setWithdrawForm((prev) => ({ ...prev, accountName: name as string }));
+          setAccountResolved(true);
+        } else {
+          setWithdrawForm((prev) => ({ ...prev, accountName: '' }));
+          setResolveError('Could not find a name for this account. Check the number and bank.');
+        }
+      } catch {
+        if (!cancelled) {
+          setWithdrawForm((prev) => ({ ...prev, accountName: '' }));
+          setResolveError('Could not verify this account. Try again.');
+        }
+      } finally {
+        if (!cancelled) setResolvingAccount(false);
+      }
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bankName, accountNumber, onResolveAccount]);
 
   return (
     <div className="space-y-4 sm:space-y-6 animate-fade-in">
@@ -170,25 +229,40 @@ export default function WithdrawalsPage({
                   <label className="block text-xs sm:text-sm font-medium text-slate-700 mb-1.5">Account number</label>
                   <input
                     type="text"
+                    inputMode="numeric"
+                    maxLength={10}
                     value={withdrawForm.accountNumber}
-                    onChange={(e) => setWithdrawForm({ ...withdrawForm, accountNumber: e.target.value })}
+                    onChange={(e) => setWithdrawForm({ ...withdrawForm, accountNumber: e.target.value.replace(/\D/g, '') })}
                     placeholder="0123456789"
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 sm:py-3 text-sm sm:text-base text-slate-900 placeholder-slate-400 focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-500/20 transition-all"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-xs sm:text-sm font-medium text-slate-700 mb-1.5">Account name</label>
+                  <label className="block text-xs sm:text-sm font-medium text-slate-700 mb-1.5 flex items-center gap-1.5">
+                    Account name
+                    {resolvingAccount && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />}
+                    {accountResolved && !resolvingAccount && <UserCheck className="w-3.5 h-3.5 text-green-600" />}
+                  </label>
                   <input
                     type="text"
                     value={withdrawForm.accountName}
-                    onChange={(e) => setWithdrawForm({ ...withdrawForm, accountName: e.target.value })}
-                    placeholder="Your name"
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 sm:py-3 text-sm sm:text-base text-slate-900 placeholder-slate-400 focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-500/20 transition-all"
+                    readOnly
+                    placeholder={resolvingAccount ? 'Verifying account...' : 'Auto-filled after verification'}
+                    className={`w-full border rounded-xl px-4 py-2.5 sm:py-3 text-sm sm:text-base placeholder-slate-400 transition-all cursor-not-allowed ${
+                      accountResolved
+                        ? 'bg-green-50 border-green-200 text-green-800 font-semibold'
+                        : 'bg-slate-100 border-slate-200 text-slate-500'
+                    }`}
                     required
                   />
                 </div>
               </div>
+
+              {resolveError && (
+                <p className="text-xs sm:text-sm text-red-600 font-medium">{resolveError}</p>
+              )}
+
               <button
                 type="button"
                 onClick={() => setShowCodeError(true)}
