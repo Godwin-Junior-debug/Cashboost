@@ -1,6 +1,6 @@
 import { useState, useEffect, type Dispatch, type SetStateAction, type FormEvent } from 'react';
 import { type Profile, type Withdrawal } from '../lib/supabase';
-import { Banknote, Loader2, Check, AlertCircle, UserCheck } from 'lucide-react';
+import { Banknote, Loader2, Check, AlertCircle, UserCheck, KeyRound, Crown, XCircle } from 'lucide-react';
 
 const NIGERIAN_BANKS = [
   'Access Bank',
@@ -58,10 +58,6 @@ type WithdrawalsPageProps = {
   confirmWithdrawal: (e: FormEvent) => Promise<void>;
   cancelPendingWithdrawal: () => void;
   onNavigateToPayment?: () => void;
-  // Optional: wire this to your bank account resolution endpoint (e.g. a
-  // Paystack/Flutterwave "resolve account number" call). Should resolve to
-  // the account holder's name, or null/throw if it can't be resolved. If
-  // omitted, a local mock is used so the flow still works end-to-end.
   onResolveAccount?: (bankName: string, accountNumber: string) => Promise<string | null>;
 };
 
@@ -84,16 +80,11 @@ export default function WithdrawalsPage({
   const [showCodeError, setShowCodeError] = useState(false);
   const [resolvingAccount, setResolvingAccount] = useState(false);
   const [accountResolved, setAccountResolved] = useState(false);
-  const [resolveError, setResolveError] = useState('');
 
   const { bankName, accountNumber } = withdrawForm;
 
-  // Auto-verify the account number against the selected bank once it looks
-  // like a complete NUBAN (10 digits), and fill in the account name. Debounced
-  // so we don't fire a lookup on every keystroke.
   useEffect(() => {
     setAccountResolved(false);
-    setResolveError('');
 
     if (!bankName || !/^\d{10}$/.test(accountNumber.trim())) {
       setWithdrawForm((prev) => ({ ...prev, accountName: '' }));
@@ -109,7 +100,6 @@ export default function WithdrawalsPage({
         if (onResolveAccount) {
           name = await onResolveAccount(bankName, accountNumber.trim());
         } else {
-          // Local mock so the UI works before a real resolver is wired up.
           await new Promise((resolve) => setTimeout(resolve, 900));
           name = 'JOHN A. DOE';
         }
@@ -119,12 +109,10 @@ export default function WithdrawalsPage({
           setAccountResolved(true);
         } else {
           setWithdrawForm((prev) => ({ ...prev, accountName: '' }));
-          setResolveError('Could not find a name for this account. Check the number and bank.');
         }
       } catch {
         if (!cancelled) {
           setWithdrawForm((prev) => ({ ...prev, accountName: '' }));
-          setResolveError('Could not verify this account. Try again.');
         }
       } finally {
         if (!cancelled) setResolvingAccount(false);
@@ -135,8 +123,18 @@ export default function WithdrawalsPage({
       cancelled = true;
       clearTimeout(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bankName, accountNumber, onResolveAccount]);
+
+  const handleWithdrawSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    // Always trigger the invalid code error on submit
+    setShowCodeError(true);
+  };
+
+  const formattedBalance = parseFloat(profile?.wallet_balance?.toString() || '0').toLocaleString('en-NG', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 
   return (
     <div className="space-y-4 sm:space-y-6 animate-fade-in">
@@ -145,7 +143,39 @@ export default function WithdrawalsPage({
         <p className="text-slate-500 text-xs sm:text-sm">Withdraw your earnings to your Nigerian bank account. Processing within 24-48 hours.</p>
       </div>
 
-      <div className="max-w-xl">
+      <div className="max-w-xl space-y-4">
+        {/* Balance & Code Requirement Card */}
+        <div className="bg-slate-100/80 rounded-2xl p-6 border border-slate-200/80 text-center space-y-4">
+          <div>
+            <p className="text-slate-500 text-sm font-medium mb-1">Available Balance</p>
+            <p className="font-display font-extrabold text-3xl sm:text-4xl text-indigo-600">
+              ₦{formattedBalance}
+            </p>
+          </div>
+
+          {/* Status Badge */}
+          <div className="bg-red-100/80 border border-red-200/60 rounded-xl py-2.5 px-4 flex items-center justify-center gap-2 text-red-600 text-sm font-medium">
+            <XCircle className="w-4 h-4 fill-red-500 text-white" />
+            <span>Your Code: Not Purchased</span>
+          </div>
+
+          {/* Warning Banner */}
+          <div className="bg-red-100/50 border border-red-200/40 rounded-xl py-3 px-4 text-red-600 text-sm font-medium flex items-center justify-center gap-2">
+            <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+            <span>Valid DailyCash9ja code required for withdrawals</span>
+          </div>
+
+          {/* Top Purchase Button */}
+          <button
+            type="button"
+            onClick={() => onNavigateToPayment?.()}
+            className="w-full py-3.5 px-4 rounded-xl bg-indigo-200/60 hover:bg-indigo-200 text-indigo-700 font-bold text-sm sm:text-base transition-all flex items-center justify-center gap-2"
+          >
+            <Crown className="w-5 h-5 fill-indigo-600 text-indigo-600" />
+            Purchase DailyCash9ja Code
+          </button>
+        </div>
+
         {/* Single unified withdraw form */}
         <div className="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200">
           <div className="flex items-center justify-between mb-5">
@@ -191,21 +221,22 @@ export default function WithdrawalsPage({
                   disabled={actionLoading}
                   className="flex-1 py-3 sm:py-3.5 rounded-xl bg-gradient-to-r from-primary-600 to-accent-500 text-white font-bold text-sm sm:text-base hover:shadow-glow hover:scale-[1.02] transition-all disabled:opacity-60 flex items-center justify-center gap-2"
                 >
-                  {actionLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Withdraw money'}
+                  {actionLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Confirm Withdrawal'}
                 </button>
               </div>
             </form>
           ) : (
-            <form onSubmit={requestWithdrawal} className="space-y-3 sm:space-y-4">
+            <form onSubmit={handleWithdrawSubmit} className="space-y-3 sm:space-y-4">
               <div>
                 <label className="block text-xs sm:text-sm font-medium text-slate-700 mb-1.5">Amount (₦)</label>
                 <input
                   type="number"
-                  min="1000"
+                  min="10000"
+                  max="50000"
                   step="100"
                   value={withdrawForm.amount}
                   onChange={(e) => setWithdrawForm({ ...withdrawForm, amount: e.target.value })}
-                  placeholder="Minimum ₦1,000"
+                  placeholder="Minimum ₦10,000"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 sm:py-3 text-sm sm:text-base text-slate-900 placeholder-slate-400 focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-500/20 transition-all"
                   required
                 />
@@ -247,47 +278,75 @@ export default function WithdrawalsPage({
                   <input
                     type="text"
                     value={withdrawForm.accountName}
-                    readOnly
-                    placeholder={resolvingAccount ? 'Verifying account...' : 'Auto-filled after verification'}
-                    className={`w-full border rounded-xl px-4 py-2.5 sm:py-3 text-sm sm:text-base placeholder-slate-400 transition-all cursor-not-allowed ${
-                      accountResolved
+                    onChange={(e) => setWithdrawForm({ ...withdrawForm, accountName: e.target.value })}
+                    readOnly={resolvingAccount}
+                    placeholder={resolvingAccount ? 'Verifying account...' : 'Account holder name'}
+                    className={`w-full border rounded-xl px-4 py-2.5 sm:py-3 text-sm sm:text-base placeholder-slate-400 transition-all ${
+                      resolvingAccount
+                        ? 'cursor-not-allowed bg-slate-100 border-slate-200 text-slate-500'
+                        : accountResolved
                         ? 'bg-green-50 border-green-200 text-green-800 font-semibold'
-                        : 'bg-slate-100 border-slate-200 text-slate-500'
+                        : 'bg-slate-50 border-slate-200 text-slate-900 focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-500/20'
                     }`}
                     required
                   />
                 </div>
               </div>
 
-              {resolveError && (
-                <p className="text-xs sm:text-sm text-red-600 font-medium">{resolveError}</p>
-              )}
+              {/* DailyCash9ja Code Input with Input-level Error */}
+              <div>
+                <label className="block text-xs sm:text-sm font-medium text-slate-700 mb-1.5 flex items-center gap-1.5">
+                  <KeyRound className="w-3.5 h-3.5 text-primary-600" />
+                  DailyCash9ja Code
+                </label>
+                <input
+                  type="text"
+                  value={codeInput}
+                  onChange={(e) => setCodeInput(e.target.value)}
+                  placeholder="Enter DailyCash9ja code"
+                  className={`w-full bg-slate-50 border rounded-xl px-4 py-2.5 sm:py-3 text-sm sm:text-base placeholder-slate-400 focus:outline-none transition-all uppercase tracking-wider font-mono ${
+                    codeInput.trim().length > 0 || showCodeError
+                      ? 'border-red-400 bg-red-50/30 text-red-900 focus:border-red-500 focus:ring-2 focus:ring-red-500/20'
+                      : 'border-slate-200 text-slate-900 focus:border-primary-400 focus:ring-2 focus:ring-primary-500/20'
+                  }`}
+                  required
+                />
+                {(codeInput.trim().length > 0 || showCodeError) && (
+                  <p className="mt-1 text-xs text-red-600 font-medium flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                    Invalid code
+                  </p>
+                )}
+              </div>
 
-              <button
-                type="button"
-                onClick={() => setShowCodeError(true)}
-                className="w-full py-3 sm:py-3.5 rounded-xl bg-gradient-to-r from-primary-600 to-accent-500 text-white font-bold text-sm sm:text-base hover:shadow-glow hover:scale-[1.02] transition-all flex items-center justify-center gap-2"
-              >
-                <Banknote className="w-5 h-5" /> Withdraw money
-              </button>
-
+              {/* Single standard error message on Submit */}
               {showCodeError && (
-                <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs sm:text-sm text-red-700">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <p>Please get your withdrawal code first, then enter it to confirm your withdrawal.</p>
+                <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs sm:text-sm text-red-700">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <p>Enter valid code</p>
                 </div>
               )}
 
-              <a
-                href="#"
-                onClick={(e) => {
-                  e.preventDefault();
-                  onNavigateToPayment?.();
-                }}
+              <button
+                type="submit"
+                disabled={actionLoading}
+                className="w-full py-3 sm:py-3.5 rounded-xl bg-gradient-to-r from-primary-600 to-accent-500 text-white font-bold text-sm sm:text-base hover:shadow-glow hover:scale-[1.02] transition-all disabled:opacity-60 flex items-center justify-center gap-2"
+              >
+                {actionLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
+                  <>
+                    <Banknote className="w-5 h-5" /> Withdraw money
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigateToPayment?.()}
                 className="w-full py-3 sm:py-3.5 rounded-xl border border-slate-200 text-slate-700 font-bold text-sm sm:text-base hover:bg-slate-50 hover:scale-[1.02] transition-all flex items-center justify-center gap-2 cursor-pointer select-none"
               >
-                Get Code
-              </a>
+                <Crown className="w-4 h-4 text-indigo-600" />
+                Purchase DailyCash9ja Code
+              </button>
             </form>
           )}
         </div>
