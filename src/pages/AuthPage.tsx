@@ -20,6 +20,7 @@ export default function AuthPage({ mode, onNavigate }: AuthPageProps) {
     phone: '',
     referralCode: '',
   });
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -32,6 +33,11 @@ export default function AuthPage({ mode, onNavigate }: AuthPageProps) {
     if (isRegister) {
       if (form.password.length < 6) {
         setError('Password must be at least 6 characters long.');
+        setLoading(false);
+        return;
+      }
+      if (!agreedToTerms) {
+        setError('You must agree to the Terms & Conditions to create an account.');
         setLoading(false);
         return;
       }
@@ -236,9 +242,39 @@ export default function AuthPage({ mode, onNavigate }: AuthPageProps) {
               </div>
             )}
 
+            {isRegister && (
+              <label className="flex items-start gap-3 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={agreedToTerms}
+                  onChange={(e) => setAgreedToTerms(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded border-white/20 bg-white/5 text-primary-500 focus:ring-2 focus:ring-primary-500/40 focus:ring-offset-0 cursor-pointer accent-primary-500"
+                  required
+                />
+                <span className="text-sm text-slate-400 leading-snug">
+                  I agree to the{' '}
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('terms')}
+                    className="text-primary-400 font-semibold hover:text-primary-300 transition-colors underline underline-offset-2"
+                  >
+                    Terms & Conditions
+                  </button>{' '}
+                  and{' '}
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('privacy')}
+                    className="text-primary-400 font-semibold hover:text-primary-300 transition-colors underline underline-offset-2"
+                  >
+                    Privacy Policy
+                  </button>
+                </span>
+              </label>
+            )}
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || (isRegister && !agreedToTerms)}
               className="w-full py-3.5 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 text-white font-bold hover:shadow-glow hover:scale-[1.02] transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {loading ? (

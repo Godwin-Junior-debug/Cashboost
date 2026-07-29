@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowLeft, Wifi, Loader2, Wallet, Check, KeyRound } from 'lucide-react';
+import { ArrowLeft, Wifi, Loader2, Wallet, Check } from 'lucide-react';
 
 type Network = 'MTN' | 'Glo' | 'Airtel' | '9mobile';
 
@@ -16,10 +16,6 @@ type DataPageProps = {
   onSubmit: (network: string, phone: string, planId: string, amount: number) => Promise<void>;
   onBack: () => void;
   onNavigateToPayment?: () => void;
-  // Optional: wire this to your OTP/verification endpoint. If omitted, a
-  // local mock is used so the flow still works end-to-end.
-  onRequestCode?: (phone: string) => Promise<void>;
-  onVerifyCode?: (phone: string, code: string) => Promise<boolean>;
 };
 
 const NETWORKS: { id: Network; color: string }[] = [
@@ -68,115 +64,32 @@ export default function DataPage({
   onSubmit,
   onBack,
   onNavigateToPayment,
-  onRequestCode,
-  onVerifyCode,
 }: DataPageProps) {
   const [network, setNetwork] = useState<Network>('MTN');
   const [phone, setPhone] = useState('');
   const [planId, setPlanId] = useState<string>('');
   const [error, setError] = useState('');
-
-  // Verification flow state
-  const [codeSent, setCodeSent] = useState(false);
-  const [codeVerified, setCodeVerified] = useState(false);
-  const [requestingCode, setRequestingCode] = useState(false);
-  const [verifyingCode, setVerifyingCode] = useState(false);
   const [otp, setOtp] = useState('');
-  const [codeError, setCodeError] = useState('');
 
   const plans = PLANS_BY_NETWORK[network];
   const selectedPlan = plans.find((p) => p.id === planId);
   const phoneValid = /^0\d{10}$/.test(phone.trim());
   const planValid = !!selectedPlan && selectedPlan.price <= walletBalance;
-  const readyForVerification = phoneValid && planValid;
+  const readyForCode = phoneValid && planValid;
 
-  // Any edit to phone/plan after a code was sent invalidates it, so the user
-  // has to re-verify against the details they're actually submitting.
   function updatePhone(value: string) {
     setPhone(value);
-    setCodeSent(false);
-    setCodeVerified(false);
-    setOtp('');
-    setCodeError('');
   }
 
   function updatePlan(id: string) {
     setPlanId(id);
-    setCodeSent(false);
-    setCodeVerified(false);
-    setOtp('');
-    setCodeError('');
   }
 
   // Plans are network-specific, so switching networks clears whatever plan
-  // was picked from the old list (and resets verification, since the price
-  // may now be different).
+  // was picked from the old list.
   function updateNetwork(n: Network) {
     setNetwork(n);
     setPlanId('');
-    setCodeSent(false);
-    setCodeVerified(false);
-    setOtp('');
-    setCodeError('');
-  }
-
-  async function handleGetCode() {
-    setError('');
-    setCodeError('');
-    if (!phoneValid) {
-      setError('Enter a valid 11-digit phone number (e.g. 08012345678).');
-      return;
-    }
-    if (!selectedPlan) {
-      setError('Select a data plan.');
-      return;
-    }
-    if (selectedPlan.price > walletBalance) {
-      setError('Insufficient wallet balance.');
-      return;
-    }
-
-    setRequestingCode(true);
-    try {
-      if (onRequestCode) {
-        await onRequestCode(phone.trim());
-      } else {
-        // Local mock so the UI works before a real OTP endpoint is wired up.
-        await new Promise((resolve) => setTimeout(resolve, 800));
-      }
-      setCodeSent(true);
-    } catch {
-      setCodeError('Could not send verification code. Try again.');
-    } finally {
-      setRequestingCode(false);
-    }
-  }
-
-  async function handleVerifyCode() {
-    setCodeError('');
-    if (otp.trim().length < 4) {
-      setCodeError('Enter the DailyCash Naija code we sent you.');
-      return;
-    }
-    setVerifyingCode(true);
-    try {
-      let ok = true;
-      if (onVerifyCode) {
-        ok = await onVerifyCode(phone.trim(), otp.trim());
-      } else {
-        // Local mock: any 4-6 digit code passes.
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-      if (ok) {
-        setCodeVerified(true);
-      } else {
-        setCodeError('Incorrect code. Try again.');
-      }
-    } catch {
-      setCodeError('Could not verify code. Try again.');
-    } finally {
-      setVerifyingCode(false);
-    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -193,10 +106,6 @@ export default function DataPage({
     }
     if (selectedPlan.price > walletBalance) {
       setError('Insufficient wallet balance.');
-      return;
-    }
-    if (!codeVerified) {
-      setError('Get and verify your code before buying data.');
       return;
     }
 
@@ -289,49 +198,33 @@ export default function DataPage({
 
         {error && <p className="text-sm text-red-600 font-medium">{error}</p>}
 
-        {/* Verification step: appears once phone + plan look valid */}
-        {readyForVerification && !codeVerified && (
+        {/* Appears once phone + plan look valid */}
+        {readyForCode && (
           <div className="space-y-2 border-t border-slate-100 pt-4">
-            <label className="block text-sm font-semibold text-slate-700">Enter DailyCash Naija code</label>
+            <label className="block text-sm font-semibold text-slate-700">Enter DailyCash9ja code</label>
             <div className="flex gap-2">
               <input
                 type="text"
                 value={otp}
                 onChange={(e) => setOtp(e.target.value)}
-                placeholder={codeSent ? 'Enter DailyCash Naija code' : 'Tap "Get code" to receive your code'}
+                placeholder="Enter your DailyCash9ja code"
                 maxLength={10}
                 className="flex-1 px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary-500 text-sm"
               />
               <button
                 type="button"
-                onClick={handleGetCode}
-                disabled={requestingCode}
-                className="px-4 py-3 rounded-xl bg-gradient-to-r from-primary-600 to-accent-500 text-white font-semibold text-xs sm:text-sm hover:shadow-glow transition-all disabled:opacity-60 flex items-center gap-2 whitespace-nowrap"
+                onClick={() => onNavigateToPayment?.()}
+                className="px-4 py-3 rounded-xl bg-gradient-to-r from-primary-600 to-accent-500 text-white font-semibold text-xs sm:text-sm hover:shadow-glow transition-all flex items-center gap-2 whitespace-nowrap"
               >
-                {requestingCode ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
-                {requestingCode ? 'Sending...' : codeSent ? 'Resend' : 'Get code'}
+                Get code
               </button>
             </div>
-            {codeSent && (
-              <p className="text-xs text-slate-500">
-                DailyCash Naija code sent to {phone.trim()}.{' '}
-                <button
-                  type="button"
-                  onClick={handleVerifyCode}
-                  disabled={verifyingCode || !otp.trim()}
-                  className="font-semibold text-primary-600 hover:text-primary-700 disabled:opacity-60 disabled:hover:text-primary-600"
-                >
-                  {verifyingCode ? 'Verifying...' : 'Verify code'}
-                </button>
-              </p>
-            )}
-            {codeError && <p className="text-sm text-red-600 font-medium">{codeError}</p>}
           </div>
         )}
 
         <button
           type="submit"
-          disabled={actionLoading || !codeVerified}
+          disabled={actionLoading}
           className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-gradient-to-r from-primary-600 to-accent-500 text-white font-bold text-sm hover:shadow-glow hover:scale-[1.01] active:scale-[0.99] transition-all disabled:opacity-60 disabled:hover:scale-100"
         >
           {actionLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Wifi className="w-5 h-5" />}
