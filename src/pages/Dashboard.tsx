@@ -45,6 +45,10 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
   const [referrals, setReferrals] = useState<Referral[]>([]);
+  // Only used for the very first load — this is the one that shows the
+  // full-screen spinner. Background refreshes (polling, post-action
+  // reloads) must NOT touch this, or they blank + remount the whole
+  // dashboard (including whatever tab/form the user is currently on).
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
@@ -71,9 +75,15 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     setTimeout(() => setToast(null), 4000);
   };
 
-  const loadData = useCallback(async () => {
+  // `silent: true` refreshes data in the background WITHOUT flipping the
+  // page-level `loading` flag. Only the initial mount effect below should
+  // ever call this without `{ silent: true }`. Every other call site
+  // (polling intervals, post-action refreshes) passes silent so users never
+  // get bounced back to a blank spinner mid-task — which was wiping out
+  // in-progress forms like ConfirmPaymentPage.
+  const loadData = useCallback(async (opts?: { silent?: boolean }) => {
     if (!user) return;
-    setLoading(true);
+    if (!opts?.silent) setLoading(true);
 
     const [tasksRes, completionsRes, txRes, wdRes, refRes] = await Promise.all([
       supabase.from('tasks').select('*').eq('is_active', true).order('created_at', { ascending: true }),
@@ -88,12 +98,15 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     setTransactions(txRes.data as Transaction[] || []);
     setWithdrawals(wdRes.data as Withdrawal[] || []);
     setReferrals(refRes.data as Referral[] || []);
-    setLoading(false);
+    if (!opts?.silent) setLoading(false);
   }, [user]);
 
+  // Initial load only — this is the sole call site allowed to show the
+  // full-screen spinner.
   useEffect(() => {
     loadData();
-  }, [loadData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -101,7 +114,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       const { data, error } = await supabase.rpc('claim_daily_login_bonus');
       if (!error && data?.success) {
         showToast('success', `Daily login bonus credited! +₦${Number(data.amount).toLocaleString()}`);
-        await Promise.all([loadData(), refreshProfile()]);
+        await Promise.all([loadData({ silent: true }), refreshProfile()]);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -114,7 +127,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     async function checkCycle() {
       const { data } = await supabase.rpc('check_and_advance_cycle');
       if (!cancelled && data?.advanced) {
-        await Promise.all([loadData(), refreshProfile()]);
+        await Promise.all([loadData({ silent: true }), refreshProfile()]);
       }
     }
 
@@ -177,7 +190,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       }
     } else {
       showToast('success', `Task completed! ₦${expectedReward.toLocaleString()} credited to your wallet.`);
-      await Promise.all([loadData(), refreshProfile(), loadRotationState()]);
+      await Promise.all([loadData({ silent: true }), refreshProfile(), loadRotationState()]);
     }
     setVerifyingTaskId(null);
   }
@@ -233,7 +246,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       setPendingWithdrawal(null);
       setCodeInput('');
       setWithdrawForm({ amount: '', bankName: '', accountNumber: '', accountName: '' });
-      await Promise.all([loadData(), refreshProfile()]);
+      await Promise.all([loadData({ silent: true }), refreshProfile()]);
     }
     setActionLoading(false);
   }
@@ -351,7 +364,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       showToast('error', error?.message || data?.message || 'Could not purchase airtime.');
     } else {
       showToast('success', `₦${amount.toLocaleString()} ${network} airtime sent to ${phone}.`);
-      await Promise.all([loadData(), refreshProfile()]);
+      await Promise.all([loadData({ silent: true }), refreshProfile()]);
     }
     setActionLoading(false);
   }
@@ -373,7 +386,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       showToast('error', error?.message || data?.message || 'Could not purchase data.');
     } else {
       showToast('success', `Data plan sent to ${phone}.`);
-      await Promise.all([loadData(), refreshProfile()]);
+      await Promise.all([loadData({ silent: true }), refreshProfile()]);
     }
     setActionLoading(false);
   }
@@ -393,7 +406,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       showToast('error', error?.message || data?.message || 'Invalid or expired code.');
     } else {
       showToast('success', `Code redeemed! ₦${Number(data.amount).toLocaleString()} credited to your wallet.`);
-      await Promise.all([loadData(), refreshProfile()]);
+      await Promise.all([loadData({ silent: true }), refreshProfile()]);
     }
     setActionLoading(false);
   }

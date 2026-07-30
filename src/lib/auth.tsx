@@ -43,7 +43,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    // IMPORTANT: this listener fires for MANY event types, not just real
+    // sign-in/sign-out — including TOKEN_REFRESHED (periodic silent token
+    // renewal, and also refired when a backgrounded mobile tab regains
+    // focus/visibility, e.g. after the native camera/photo picker closes).
+    // We skip re-running setUser/loadProfile/setLoading for THAT event only,
+    // since the identity hasn't actually changed and doing so was causing
+    // Dashboard to unmount and reset in-progress form state.
+    // NOTE: INITIAL_SESSION is deliberately NOT skipped — unlike
+    // TOKEN_REFRESHED, it's the authoritative signal that the session has
+    // finished restoring from storage on first load, and getSession() alone
+    // can lose that race. Skipping it caused profile (wallet balance,
+    // tasks, etc.) to stay null and the whole dashboard to render empty.
+    const { data: listener } = supabase.auth.onAuthStateChange((event, newSession) => {
+      // TEMP DEBUG — remove once we've confirmed the real event sequence
+      // on a phone during the upload/picker flow.
+      console.log('[auth event]', event, 'hasSession:', !!newSession, 'visibility:', document.visibilityState);
+
+      if (event === 'TOKEN_REFRESHED') {
+        // Keep the session object fresh (new access token) without
+        // touching user/profile/loading, so nothing downstream remounts.
+        setSession(newSession);
+        return;
+      }
+
       (async () => {
         setSession(newSession);
         setUser(newSession?.user ?? null);
@@ -93,7 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (user) await loadProfile(user.id);
   }
 
-  // Auto sign-out after 2 minutes of no activity (mouse, keyboard, touch,
+  // Auto sign-out after 15 minutes of no activity (mouse, keyboard, touch,
   // or scroll). Only runs while someone is actually logged in. Any of
   // those events resets the timer; if none happen for the full duration,
   // we sign the user out, which App.tsx already redirects to /login for.
