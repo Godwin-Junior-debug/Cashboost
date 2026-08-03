@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Loader2, UploadCloud, FileImage, X, CheckCircle2, User, Hash } from 'lucide-react';
 
 export type PaymentConfirmDetails = {
@@ -16,56 +16,121 @@ type ConfirmPaymentPageProps = {
 };
 
 const MAX_FILE_MB = 5;
+const STORAGE_KEY = 'confirmPaymentForm';
 
-// Module-level cache: survives even if this component unmounts/remounts
-// (e.g. if opening the mobile file picker causes a parent re-render/remount).
-// This is NOT React state, so it isn't wiped when the component tree resets.
-const formCache: {
+// sessionStorage survives a full page reload (unlike plain JS variables),
+// which is what actually happens on some mobile browsers/PWAs: opening the
+// native file/photo picker can cause the tab to be reclaimed from memory and
+// reloaded when you switch back. We persist the text fields plus the file
+// (as base64) so everything can be restored after that reload.
+
+type StoredForm = {
   fullName: string;
   amountSent: string;
   reference: string;
-  file: File | null;
-  preview: string | null;
-} = {
-  fullName: '',
-  amountSent: '',
-  reference: '',
-  file: null,
-  preview: null,
+  fileName?: string;
+  fileType?: string;
+  fileDataUrl?: string;
 };
 
+function loadStoredForm(): StoredForm | null {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as StoredForm) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredForm(data: StoredForm) {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    // ignore quota/serialization errors
+  }
+}
+
+function clearStoredForm() {
+  try {
+    sessionStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function dataUrlToFile(dataUrl: string, fileName: string, fileType: string): File {
+  const [, base64] = dataUrl.split(',');
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], fileName, { type: fileType });
+}
+
 export default function ConfirmPaymentPage({ actionLoading, submitted, onSubmit, onBack }: ConfirmPaymentPageProps) {
-  const [fullName, setFullNameState] = useState(formCache.fullName);
-  const [amountSent, setAmountSentState] = useState(formCache.amountSent);
-  const [reference, setReferenceState] = useState(formCache.reference);
-  const [file, setFileState] = useState<File | null>(formCache.file);
-  const [preview, setPreviewState] = useState<string | null>(formCache.preview);
+  const [fullName, setFullNameState] = useState('');
+  const [amountSent, setAmountSentState] = useState('');
+  const [reference, setReferenceState] = useState('');
+  const [file, setFileState] = useState<File | null>(null);
+  const [preview, setPreviewState] = useState<string | null>(null);
   const [formError, setFormError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Wrap every setter so React state and the module cache always stay in sync
+  // Restore from sessionStorage on mount (covers both a plain remount and a full reload)
+  useEffect(() => {
+    const stored = loadStoredForm();
+    if (stored) {
+      setFullNameState(stored.fullName);
+      setAmountSentState(stored.amountSent);
+      setReferenceState(stored.reference);
+      if (stored.fileDataUrl && stored.fileName && stored.fileType) {
+        const restoredFile = dataUrlToFile(stored.fileDataUrl, stored.fileName, stored.fileType);
+        setFileState(restoredFile);
+        setPreviewState(stored.fileType.startsWith('image/') ? stored.fileDataUrl : null);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function persist(next: Partial<StoredForm>) {
+    const current = loadStoredForm() || { fullName: '', amountSent: '', reference: '' };
+    saveStoredForm({ ...current, ...next });
+  }
+
   function setFullName(v: string) {
-    formCache.fullName = v;
     setFullNameState(v);
+    persist({ fullName: v });
   }
   function setAmountSent(v: string) {
-    formCache.amountSent = v;
     setAmountSentState(v);
+    persist({ amountSent: v });
   }
   function setReference(v: string) {
-    formCache.reference = v;
     setReferenceState(v);
+    persist({ reference: v });
   }
-  function setFile(v: File | null) {
-    formCache.file = v;
+  async function setFile(v: File | null) {
     setFileState(v);
+    if (v) {
+      const dataUrl = await fileToDataUrl(v);
+      persist({ fileName: v.name, fileType: v.type, fileDataUrl: dataUrl });
+    } else {
+      persist({ fileName: undefined, fileType: undefined, fileDataUrl: undefined });
+    }
   }
   function setPreview(v: string | null) {
-    formCache.preview = v;
     setPreviewState(v);
   }
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = e.target.files?.[0];
     if (!selected) return;
 
@@ -79,9 +144,10 @@ export default function ConfirmPaymentPage({ actionLoading, submitted, onSubmit,
     }
 
     setFormError('');
-    setFile(selected);
+    await setFile(selected);
     if (selected.type.startsWith('image/')) {
-      setPreview(URL.createObjectURL(selected));
+      const dataUrl = await fileToDataUrl(selected);
+      setPreview(dataUrl);
     } else {
       setPreview(null);
     }
@@ -94,11 +160,7 @@ export default function ConfirmPaymentPage({ actionLoading, submitted, onSubmit,
   }
 
   function clearCache() {
-    formCache.fullName = '';
-    formCache.amountSent = '';
-    formCache.reference = '';
-    formCache.file = null;
-    formCache.preview = null;
+    clearStoredForm();
   }
 
   function handleSubmit(e: React.FormEvent) {
