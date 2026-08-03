@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Loader2, UploadCloud, FileImage, X, CheckCircle2, User, Hash } from 'lucide-react';
 
 export type PaymentConfirmDetails = {
@@ -16,15 +16,121 @@ type ConfirmPaymentPageProps = {
 };
 
 const MAX_FILE_MB = 5;
+const STORAGE_KEY = 'confirmPaymentForm';
+
+// sessionStorage survives a full page reload (unlike plain JS variables),
+// which is what actually happens on some mobile browsers/PWAs: opening the
+// native file/photo picker can cause the tab to be reclaimed from memory and
+// reloaded when you switch back. We persist the text fields plus the file
+// (as base64) so everything can be restored after that reload.
+
+type StoredForm = {
+  fullName: string;
+  amountSent: string;
+  reference: string;
+  fileName?: string;
+  fileType?: string;
+  fileDataUrl?: string;
+};
+
+function loadStoredForm(): StoredForm | null {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as StoredForm) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredForm(data: StoredForm) {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    // ignore quota/serialization errors
+  }
+}
+
+function clearStoredForm() {
+  try {
+    sessionStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function dataUrlToFile(dataUrl: string, fileName: string, fileType: string): File {
+  const [, base64] = dataUrl.split(',');
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], fileName, { type: fileType });
+}
 
 export default function ConfirmPaymentPage({ actionLoading, submitted, onSubmit, onBack }: ConfirmPaymentPageProps) {
-  const [fullName, setFullName] = useState('');
-  const [amountSent, setAmountSent] = useState('');
-  const [reference, setReference] = useState('');
-  const [file, setFile] = useState<File | null>(null);
+  const [fullName, setFullNameState] = useState('');
+  const [amountSent, setAmountSentState] = useState('');
+  const [reference, setReferenceState] = useState('');
+  const [file, setFileState] = useState<File | null>(null);
+  const [preview, setPreviewState] = useState<string | null>(null);
   const [formError, setFormError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  // Restore from sessionStorage on mount (covers both a plain remount and a full reload)
+  useEffect(() => {
+    const stored = loadStoredForm();
+    if (stored) {
+      setFullNameState(stored.fullName);
+      setAmountSentState(stored.amountSent);
+      setReferenceState(stored.reference);
+      if (stored.fileDataUrl && stored.fileName && stored.fileType) {
+        const restoredFile = dataUrlToFile(stored.fileDataUrl, stored.fileName, stored.fileType);
+        setFileState(restoredFile);
+        setPreviewState(stored.fileType.startsWith('image/') ? stored.fileDataUrl : null);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function persist(next: Partial<StoredForm>) {
+    const current = loadStoredForm() || { fullName: '', amountSent: '', reference: '' };
+    saveStoredForm({ ...current, ...next });
+  }
+
+  function setFullName(v: string) {
+    setFullNameState(v);
+    persist({ fullName: v });
+  }
+  function setAmountSent(v: string) {
+    setAmountSentState(v);
+    persist({ amountSent: v });
+  }
+  function setReference(v: string) {
+    setReferenceState(v);
+    persist({ reference: v });
+  }
+  async function setFile(v: File | null) {
+    setFileState(v);
+    if (v) {
+      const dataUrl = await fileToDataUrl(v);
+      persist({ fileName: v.name, fileType: v.type, fileDataUrl: dataUrl });
+    } else {
+      persist({ fileName: undefined, fileType: undefined, fileDataUrl: undefined });
+    }
+  }
+  function setPreview(v: string | null) {
+    setPreviewState(v);
+  }
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = e.target.files?.[0];
     if (!selected) return;
 
@@ -38,11 +144,23 @@ export default function ConfirmPaymentPage({ actionLoading, submitted, onSubmit,
     }
 
     setFormError('');
-    setFile(selected);
+    await setFile(selected);
+    if (selected.type.startsWith('image/')) {
+      const dataUrl = await fileToDataUrl(selected);
+      setPreview(dataUrl);
+    } else {
+      setPreview(null);
+    }
   }
 
   function removeFile() {
     setFile(null);
+    setPreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  function clearCache() {
+    clearStoredForm();
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -57,13 +175,19 @@ export default function ConfirmPaymentPage({ actionLoading, submitted, onSubmit,
     }
     setFormError('');
     onSubmit({ fullName: fullName.trim(), amountSent: amountSent.trim(), reference: reference.trim(), receiptFile: file });
+    clearCache();
+  }
+
+  function handleBack() {
+    clearCache();
+    onBack();
   }
 
   if (submitted) {
     return (
       <div className="space-y-6 animate-fade-in">
         <button
-          onClick={onBack}
+          onClick={handleBack}
           className="flex items-center gap-1.5 text-sm font-semibold text-slate-500 hover:text-slate-700 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" /> Back
@@ -85,7 +209,7 @@ export default function ConfirmPaymentPage({ actionLoading, submitted, onSubmit,
   return (
     <div className="space-y-6 animate-fade-in">
       <button
-        onClick={onBack}
+        onClick={handleBack}
         className="flex items-center gap-1.5 text-sm font-semibold text-slate-500 hover:text-slate-700 transition-colors"
       >
         <ArrowLeft className="w-4 h-4" /> Back
@@ -138,19 +262,24 @@ export default function ConfirmPaymentPage({ actionLoading, submitted, onSubmit,
         <div>
           <label className="text-sm font-semibold text-slate-700 mb-2 block">Payment receipt / screenshot</label>
           {!file ? (
-            <label
-              htmlFor="payment-receipt-upload"
-              className="flex flex-col items-center justify-center gap-2 py-10 rounded-xl border-2 border-dashed border-slate-200 hover:border-primary-400 hover:bg-slate-50 transition-colors cursor-pointer text-center"
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full flex flex-col items-center justify-center gap-2 py-10 rounded-xl border-2 border-dashed border-slate-200 hover:border-primary-400 hover:bg-slate-50 transition-colors"
             >
               <UploadCloud className="w-8 h-8 text-slate-400" />
-              <span className="text-sm font-semibold text-slate-600">Tap to upload receipt</span>
+              <span className="text-sm font-semibold text-slate-600">Click to upload receipt</span>
               <span className="text-xs text-slate-400">PNG, JPG, WEBP or PDF · Max {MAX_FILE_MB}MB</span>
-            </label>
+            </button>
           ) : (
             <div className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 bg-slate-50">
-              <div className="w-14 h-14 rounded-lg bg-white border border-slate-200 flex items-center justify-center flex-shrink-0">
-                <FileImage className="w-6 h-6 text-slate-400" />
-              </div>
+              {preview ? (
+                <img src={preview} alt="Receipt preview" className="w-14 h-14 rounded-lg object-cover flex-shrink-0" />
+              ) : (
+                <div className="w-14 h-14 rounded-lg bg-white border border-slate-200 flex items-center justify-center flex-shrink-0">
+                  <FileImage className="w-6 h-6 text-slate-400" />
+                </div>
+              )}
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-slate-800 truncate">{file.name}</p>
                 <p className="text-xs text-slate-400">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
@@ -165,7 +294,7 @@ export default function ConfirmPaymentPage({ actionLoading, submitted, onSubmit,
             </div>
           )}
           <input
-            id="payment-receipt-upload"
+            ref={fileInputRef}
             type="file"
             accept="image/png,image/jpeg,image/jpg,image/webp,application/pdf"
             onChange={handleFileChange}
