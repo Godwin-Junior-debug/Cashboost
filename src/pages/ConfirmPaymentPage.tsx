@@ -17,14 +17,53 @@ type ConfirmPaymentPageProps = {
 
 const MAX_FILE_MB = 5;
 
+// Module-level cache: survives even if this component unmounts/remounts
+// (e.g. if opening the mobile file picker causes a parent re-render/remount).
+// This is NOT React state, so it isn't wiped when the component tree resets.
+const formCache: {
+  fullName: string;
+  amountSent: string;
+  reference: string;
+  file: File | null;
+  preview: string | null;
+} = {
+  fullName: '',
+  amountSent: '',
+  reference: '',
+  file: null,
+  preview: null,
+};
+
 export default function ConfirmPaymentPage({ actionLoading, submitted, onSubmit, onBack }: ConfirmPaymentPageProps) {
-  const [fullName, setFullName] = useState('');
-  const [amountSent, setAmountSent] = useState('');
-  const [reference, setReference] = useState('');
-  const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [fullName, setFullNameState] = useState(formCache.fullName);
+  const [amountSent, setAmountSentState] = useState(formCache.amountSent);
+  const [reference, setReferenceState] = useState(formCache.reference);
+  const [file, setFileState] = useState<File | null>(formCache.file);
+  const [preview, setPreviewState] = useState<string | null>(formCache.preview);
   const [formError, setFormError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Wrap every setter so React state and the module cache always stay in sync
+  function setFullName(v: string) {
+    formCache.fullName = v;
+    setFullNameState(v);
+  }
+  function setAmountSent(v: string) {
+    formCache.amountSent = v;
+    setAmountSentState(v);
+  }
+  function setReference(v: string) {
+    formCache.reference = v;
+    setReferenceState(v);
+  }
+  function setFile(v: File | null) {
+    formCache.file = v;
+    setFileState(v);
+  }
+  function setPreview(v: string | null) {
+    formCache.preview = v;
+    setPreviewState(v);
+  }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = e.target.files?.[0];
@@ -54,6 +93,14 @@ export default function ConfirmPaymentPage({ actionLoading, submitted, onSubmit,
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
+  function clearCache() {
+    formCache.fullName = '';
+    formCache.amountSent = '';
+    formCache.reference = '';
+    formCache.file = null;
+    formCache.preview = null;
+  }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!fullName.trim()) {
@@ -66,13 +113,19 @@ export default function ConfirmPaymentPage({ actionLoading, submitted, onSubmit,
     }
     setFormError('');
     onSubmit({ fullName: fullName.trim(), amountSent: amountSent.trim(), reference: reference.trim(), receiptFile: file });
+    clearCache();
+  }
+
+  function handleBack() {
+    clearCache();
+    onBack();
   }
 
   if (submitted) {
     return (
       <div className="space-y-6 animate-fade-in">
         <button
-          onClick={onBack}
+          onClick={handleBack}
           className="flex items-center gap-1.5 text-sm font-semibold text-slate-500 hover:text-slate-700 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" /> Back
@@ -94,7 +147,7 @@ export default function ConfirmPaymentPage({ actionLoading, submitted, onSubmit,
   return (
     <div className="space-y-6 animate-fade-in">
       <button
-        onClick={onBack}
+        onClick={handleBack}
         className="flex items-center gap-1.5 text-sm font-semibold text-slate-500 hover:text-slate-700 transition-colors"
       >
         <ArrowLeft className="w-4 h-4" /> Back
