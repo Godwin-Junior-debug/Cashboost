@@ -81,7 +81,7 @@ export default function ActivityBadge() {
     const cycleMessages = () => {
       if (!isMounted) return;
 
-      // Smooth slide-up exit
+      // Smooth slide-down exit
       setVisible(false);
 
       setTimeout(() => {
@@ -102,7 +102,7 @@ export default function ActivityBadge() {
           setCurrentMessage(getRandomItem(statOptions));
         }
 
-        // Smooth slide-down entry
+        // Smooth slide-up entry
         setVisible(true);
       }, 300);
     };
@@ -122,8 +122,8 @@ export default function ActivityBadge() {
 
   return (
     <div
-      className={`fixed top-4 left-3 right-3 sm:left-4 sm:right-auto z-50 flex items-center gap-2 sm:gap-2.5 bg-white border border-slate-200 shadow-lg rounded-full pl-2 pr-3 sm:pr-4 py-2 max-w-full sm:max-w-none transition-all duration-300 transform ${
-        visible ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-2 scale-95'
+      className={`fixed bottom-4 left-3 right-3 sm:left-4 sm:right-auto z-50 flex items-center gap-2 sm:gap-2.5 bg-white border border-slate-200 shadow-lg rounded-full pl-2 pr-3 sm:pr-4 py-2 max-w-full sm:max-w-none transition-all duration-300 transform ${
+        visible ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-2 scale-95'
       }`}
     >
       <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-br ${currentMessage.color} flex items-center justify-center flex-shrink-0 shadow-sm`}>

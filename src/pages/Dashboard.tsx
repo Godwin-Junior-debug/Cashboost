@@ -45,10 +45,6 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
   const [referrals, setReferrals] = useState<Referral[]>([]);
-  // Only used for the very first load — this is the one that shows the
-  // full-screen spinner. Background refreshes (polling, post-action
-  // reloads) must NOT touch this, or they blank + remount the whole
-  // dashboard (including whatever tab/form the user is currently on).
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
@@ -75,15 +71,9 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     setTimeout(() => setToast(null), 4000);
   };
 
-  // `silent: true` refreshes data in the background WITHOUT flipping the
-  // page-level `loading` flag. Only the initial mount effect below should
-  // ever call this without `{ silent: true }`. Every other call site
-  // (polling intervals, post-action refreshes) passes silent so users never
-  // get bounced back to a blank spinner mid-task — which was wiping out
-  // in-progress forms like ConfirmPaymentPage.
-  const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+  const loadData = useCallback(async () => {
     if (!user) return;
-    if (!opts?.silent) setLoading(true);
+    setLoading(true);
 
     const [tasksRes, completionsRes, txRes, wdRes, refRes] = await Promise.all([
       supabase.from('tasks').select('*').eq('is_active', true).order('created_at', { ascending: true }),
@@ -98,15 +88,12 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     setTransactions(txRes.data as Transaction[] || []);
     setWithdrawals(wdRes.data as Withdrawal[] || []);
     setReferrals(refRes.data as Referral[] || []);
-    if (!opts?.silent) setLoading(false);
+    setLoading(false);
   }, [user]);
 
-  // Initial load only — this is the sole call site allowed to show the
-  // full-screen spinner.
   useEffect(() => {
     loadData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [loadData]);
 
   useEffect(() => {
     if (!user) return;
@@ -114,7 +101,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       const { data, error } = await supabase.rpc('claim_daily_login_bonus');
       if (!error && data?.success) {
         showToast('success', `Daily login bonus credited! +₦${Number(data.amount).toLocaleString()}`);
-        await Promise.all([loadData({ silent: true }), refreshProfile()]);
+        await Promise.all([loadData(), refreshProfile()]);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -127,7 +114,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     async function checkCycle() {
       const { data } = await supabase.rpc('check_and_advance_cycle');
       if (!cancelled && data?.advanced) {
-        await Promise.all([loadData({ silent: true }), refreshProfile()]);
+        await Promise.all([loadData(), refreshProfile()]);
       }
     }
 
@@ -190,7 +177,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       }
     } else {
       showToast('success', `Task completed! ₦${expectedReward.toLocaleString()} credited to your wallet.`);
-      await Promise.all([loadData({ silent: true }), refreshProfile(), loadRotationState()]);
+      await Promise.all([loadData(), refreshProfile(), loadRotationState()]);
     }
     setVerifyingTaskId(null);
   }
@@ -225,28 +212,6 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     } else {
       setPendingWithdrawal({ id: data.withdrawal_id, code: data.code });
       showToast('success', 'Enter the verification code below to confirm your withdrawal.');
-    }
-    setActionLoading(false);
-  }
-
-  async function confirmWithdrawal(e: React.FormEvent) {
-    e.preventDefault();
-    if (!pendingWithdrawal) return;
-
-    setActionLoading(true);
-    const { data, error } = await supabase.rpc('confirm_withdrawal', {
-      p_withdrawal_id: pendingWithdrawal.id,
-      p_code: codeInput.trim(),
-    });
-
-    if (error || !data?.success) {
-      showToast('error', error?.message || data?.message || 'Verification failed.');
-    } else {
-      showToast('success', 'Withdrawal confirmed! Processing within 24-48 hours.');
-      setPendingWithdrawal(null);
-      setCodeInput('');
-      setWithdrawForm({ amount: '', bankName: '', accountNumber: '', accountName: '' });
-      await Promise.all([loadData({ silent: true }), refreshProfile()]);
     }
     setActionLoading(false);
   }
@@ -364,7 +329,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       showToast('error', error?.message || data?.message || 'Could not purchase airtime.');
     } else {
       showToast('success', `₦${amount.toLocaleString()} ${network} airtime sent to ${phone}.`);
-      await Promise.all([loadData({ silent: true }), refreshProfile()]);
+      await Promise.all([loadData(), refreshProfile()]);
     }
     setActionLoading(false);
   }
@@ -386,7 +351,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       showToast('error', error?.message || data?.message || 'Could not purchase data.');
     } else {
       showToast('success', `Data plan sent to ${phone}.`);
-      await Promise.all([loadData({ silent: true }), refreshProfile()]);
+      await Promise.all([loadData(), refreshProfile()]);
     }
     setActionLoading(false);
   }
@@ -406,7 +371,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       showToast('error', error?.message || data?.message || 'Invalid or expired code.');
     } else {
       showToast('success', `Code redeemed! ₦${Number(data.amount).toLocaleString()} credited to your wallet.`);
-      await Promise.all([loadData({ silent: true }), refreshProfile()]);
+      await Promise.all([loadData(), refreshProfile()]);
     }
     setActionLoading(false);
   }
@@ -433,20 +398,42 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   // itself. Build an admin flow to verify the transfer, generate a code worth
   // `voucher_value`, and deliver it to the user once approved.
   async function submitVoucherPaymentProof(details: VoucherPaymentConfirmDetails) {
-    if (!user || !pendingVoucherTier) return;
-    setActionLoading(true);
-    try {
-      const ext = details.receiptFile.name.split('.').pop() || 'jpg';
-      const path = `${user.id}/${Date.now()}.${ext}`;
+  if (!user) {
+    showToast('error', 'You must be logged in to submit payment.');
+    return;
+  }
 
-      const { error: uploadError } = await supabase.storage
-        .from('voucher-receipts')
-        .upload(path, details.receiptFile);
-      if (uploadError) throw uploadError;
+  if (!pendingVoucherTier) {
+    showToast('error', 'Voucher selection lost. Please re-select your voucher tier.');
+    setTab('buy-redeem');
+    return;
+  }
 
-      const { data: urlData } = supabase.storage.from('voucher-receipts').getPublicUrl(path);
+  setActionLoading(true);
 
-      const { error: insertError } = await supabase.from('voucher_payment_requests').insert({
+  try {
+    const ext = details.receiptFile.name.split('.').pop() || 'jpg';
+    const path = `${user.id}/${Date.now()}.${ext}`;
+
+    // 1. Storage Upload
+    const { error: uploadError } = await supabase.storage
+      .from('voucher-receipts')
+      .upload(path, details.receiptFile);
+
+    if (uploadError) {
+      console.error('Storage upload error:', uploadError);
+      throw new Error(`Receipt upload failed: ${uploadError.message}`);
+    }
+
+    // 2. Get Public URL
+    const { data: urlData } = supabase.storage
+      .from('voucher-receipts')
+      .getPublicUrl(path);
+
+    // 3. Database Insert
+    const { error: insertError } = await supabase
+      .from('voucher_payment_requests')
+      .insert({
         user_id: user.id,
         full_name: details.fullName,
         amount_sent: details.amountSent ? parseFloat(details.amountSent) : pendingVoucherTier.price,
@@ -456,17 +443,26 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         purchase_price: pendingVoucherTier.price,
         status: 'pending',
       });
-      if (insertError) throw insertError;
 
-      showToast('success', 'Payment submitted! Your voucher code will be sent within 1 to 2 hours after review.');
-      setVoucherPaymentSubmitted(true);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Could not submit payment. Please try again.';
-      showToast('error', message);
+    if (insertError) {
+      console.error('Database insert error:', insertError);
+      throw new Error(`Failed to save payment record: ${insertError.message}`);
     }
+
+    // Dynamic message based on admin status
+    const successMsg = profile?.is_admin
+      ? 'Payment processed successfully! (Admin Mode)'
+      : 'Payment submitted and pending review! Your voucher code will be sent within 1 to 2 hours.';
+
+    showToast('success', successMsg);
+    setVoucherPaymentSubmitted(true);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Could not submit payment. Please try again.';
+    showToast('error', message);
+  } finally {
     setActionLoading(false);
   }
-
+}
   function copyReferralCode() {
     if (!profile) return;
     navigator.clipboard.writeText(profile.referral_code);
@@ -849,11 +845,8 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                 requestWithdrawal={requestWithdrawal}
                 withdrawals={withdrawals}
                 pendingWithdrawals={pendingWithdrawals}
-                pendingWithdrawal={pendingWithdrawal}
                 codeInput={codeInput}
                 setCodeInput={setCodeInput}
-                confirmWithdrawal={confirmWithdrawal}
-                cancelPendingWithdrawal={() => { setPendingWithdrawal(null); setCodeInput(''); }}
                 onNavigateToPayment={() => setTab('payment')}
                 onResolveAccount={resolveAccount}
               />
@@ -879,16 +872,16 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
               />
             )}
 
-            {/* ===== CONFIRM PAYMENT ===== */}
-            {tab === 'confirm-payment' && (
-              <ConfirmPaymentPage
-                actionLoading={actionLoading}
-                submitted={paymentSubmitted}
-                onSubmit={submitPaymentProof}
-                onBack={() => setTab(paymentSubmitted ? 'overview' : 'payment')}
-              />
-            )}
-
+                {/* ===== CONFIRM PAYMENT ===== */}
+        {tab === 'confirm-payment' && (
+          <ConfirmPaymentPage
+            actionLoading={actionLoading}
+            submitted={paymentSubmitted}
+            currentUserEmail={user?.email || ''}
+            onSubmit={submitPaymentProof}
+            onBack={() => setTab(paymentSubmitted ? 'overview' : 'payment')}
+          />
+        )}
             {/* ===== PROFILE ===== */}
             {tab === 'profile' && <ProfilePage />}
 

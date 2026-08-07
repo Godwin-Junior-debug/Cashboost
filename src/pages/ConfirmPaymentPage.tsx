@@ -141,6 +141,7 @@ export default function ConfirmPaymentPage({
     });
   }
 
+  // SUBMITTED / SUCCESS VIEW
   if (submitted) {
     return (
       <div className="space-y-6 animate-fade-in">
@@ -167,6 +168,7 @@ export default function ConfirmPaymentPage({
     );
   }
 
+  // MAIN FORM VIEW
   return (
     <div className="space-y-6 animate-fade-in">
       <button
