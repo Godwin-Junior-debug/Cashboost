@@ -1,13 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Loader2, UploadCloud, FileImage, X, CheckCircle2, User, Hash, AlertCircle, XCircle } from 'lucide-react';
+import { ArrowLeft, Loader2, UploadCloud, FileImage, X, CheckCircle2, User, Hash } from 'lucide-react';
 
 export type PaymentConfirmDetails = {
   fullName: string;
   amountSent: string;
   reference: string;
   receiptFile: File;
-  status: 'Pending' | 'Successful';
-  isAdmin: boolean;
 };
 
 type ConfirmPaymentPageProps = {
@@ -15,71 +13,124 @@ type ConfirmPaymentPageProps = {
   submitted: boolean;
   onSubmit: (details: PaymentConfirmDetails) => void;
   onBack: () => void;
-  currentUserEmail?: string;
 };
 
-const ADMIN_EMAIL = 'dailycash9ja@gmail.com';
 const MAX_FILE_MB = 5;
-const STORAGE_KEY = 'payment_form_draft_v1';
+const STORAGE_KEY = 'confirmPaymentForm';
 
-export default function ConfirmPaymentPage({
-  actionLoading,
-  submitted,
-  onSubmit,
-  onBack,
-  currentUserEmail = '',
-}: ConfirmPaymentPageProps) {
-  const isAdmin = currentUserEmail.toLowerCase().trim() === ADMIN_EMAIL;
+// sessionStorage survives a full page reload (unlike plain JS variables),
+// which is what actually happens on some mobile browsers/PWAs: opening the
+// native file/photo picker can cause the tab to be reclaimed from memory and
+// reloaded when you switch back. We persist the text fields plus the file
+// (as base64) so everything can be restored after that reload.
 
-  const [fullName, setFullName] = useState(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      return saved ? JSON.parse(saved).fullName || '' : '';
-    } catch {
-      return '';
-    }
+type StoredForm = {
+  fullName: string;
+  amountSent: string;
+  reference: string;
+  fileName?: string;
+  fileType?: string;
+  fileDataUrl?: string;
+};
+
+function loadStoredForm(): StoredForm | null {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as StoredForm) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredForm(data: StoredForm) {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    // ignore quota/serialization errors
+  }
+}
+
+function clearStoredForm() {
+  try {
+    sessionStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
   });
+}
 
-  const [amountSent, setAmountSent] = useState(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      return saved ? JSON.parse(saved).amountSent || '' : '';
-    } catch {
-      return '';
-    }
-  });
+function dataUrlToFile(dataUrl: string, fileName: string, fileType: string): File {
+  const [, base64] = dataUrl.split(',');
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], fileName, { type: fileType });
+}
 
-  const [reference, setReference] = useState(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      return saved ? JSON.parse(saved).reference || '' : '';
-    } catch {
-      return '';
-    }
-  });
-
-  const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
+export default function ConfirmPaymentPage({ actionLoading, submitted, onSubmit, onBack }: ConfirmPaymentPageProps) {
+  const [fullName, setFullNameState] = useState('');
+  const [amountSent, setAmountSentState] = useState('');
+  const [reference, setReferenceState] = useState('');
+  const [file, setFileState] = useState<File | null>(null);
+  const [preview, setPreviewState] = useState<string | null>(null);
   const [formError, setFormError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Restore from sessionStorage on mount (covers both a plain remount and a full reload)
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ fullName, amountSent, reference }));
-    } catch (e) {
-      console.error('Failed to save draft form state:', e);
-    }
-  }, [fullName, amountSent, reference]);
-
-  useEffect(() => {
-    return () => {
-      if (preview) {
-        URL.revokeObjectURL(preview);
+    const stored = loadStoredForm();
+    if (stored) {
+      setFullNameState(stored.fullName);
+      setAmountSentState(stored.amountSent);
+      setReferenceState(stored.reference);
+      if (stored.fileDataUrl && stored.fileName && stored.fileType) {
+        const restoredFile = dataUrlToFile(stored.fileDataUrl, stored.fileName, stored.fileType);
+        setFileState(restoredFile);
+        setPreviewState(stored.fileType.startsWith('image/') ? stored.fileDataUrl : null);
       }
-    };
-  }, [preview]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function persist(next: Partial<StoredForm>) {
+    const current = loadStoredForm() || { fullName: '', amountSent: '', reference: '' };
+    saveStoredForm({ ...current, ...next });
+  }
+
+  function setFullName(v: string) {
+    setFullNameState(v);
+    persist({ fullName: v });
+  }
+  function setAmountSent(v: string) {
+    setAmountSentState(v);
+    persist({ amountSent: v });
+  }
+  function setReference(v: string) {
+    setReferenceState(v);
+    persist({ reference: v });
+  }
+  async function setFile(v: File | null) {
+    setFileState(v);
+    if (v) {
+      const dataUrl = await fileToDataUrl(v);
+      persist({ fileName: v.name, fileType: v.type, fileDataUrl: dataUrl });
+    } else {
+      persist({ fileName: undefined, fileType: undefined, fileDataUrl: undefined });
+    }
+  }
+  function setPreview(v: string | null) {
+    setPreviewState(v);
+  }
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = e.target.files?.[0];
     if (!selected) return;
 
@@ -93,11 +144,10 @@ export default function ConfirmPaymentPage({
     }
 
     setFormError('');
-    setFile(selected);
-
+    await setFile(selected);
     if (selected.type.startsWith('image/')) {
-      if (preview) URL.revokeObjectURL(preview);
-      setPreview(URL.createObjectURL(selected));
+      const dataUrl = await fileToDataUrl(selected);
+      setPreview(dataUrl);
     } else {
       setPreview(null);
     }
@@ -105,9 +155,12 @@ export default function ConfirmPaymentPage({
 
   function removeFile() {
     setFile(null);
-    if (preview) URL.revokeObjectURL(preview);
     setPreview(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  function clearCache() {
+    clearStoredForm();
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -116,37 +169,25 @@ export default function ConfirmPaymentPage({
       setFormError('Please enter the full name used on the bank transfer.');
       return;
     }
-
-    if (!isAdmin && !file) {
+    if (!file) {
       setFormError('Please upload your payment receipt.');
       return;
     }
-
     setFormError('');
-
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch {}
-
-    const status = isAdmin ? 'Successful' : 'Pending';
-    const fileToSubmit = file || new File([], 'admin_receipt.png', { type: 'image/png' });
-
-    onSubmit({
-      fullName: fullName.trim(),
-      amountSent: amountSent.trim(),
-      reference: reference.trim(),
-      receiptFile: fileToSubmit,
-      status,
-      isAdmin,
-    });
+    onSubmit({ fullName: fullName.trim(), amountSent: amountSent.trim(), reference: reference.trim(), receiptFile: file });
+    clearCache();
   }
 
-  // SUBMITTED / SUCCESS VIEW
+  function handleBack() {
+    clearCache();
+    onBack();
+  }
+
   if (submitted) {
     return (
       <div className="space-y-6 animate-fade-in">
         <button
-          onClick={onBack}
+          onClick={handleBack}
           className="flex items-center gap-1.5 text-sm font-semibold text-slate-500 hover:text-slate-700 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" /> Back
@@ -155,46 +196,28 @@ export default function ConfirmPaymentPage({
           <div className="w-16 h-16 rounded-2xl bg-green-50 flex items-center justify-center mx-auto mb-4">
             <CheckCircle2 className="w-8 h-8 text-green-600" />
           </div>
-          <h1 className="font-display font-extrabold text-2xl text-slate-900 mb-2">
-            {isAdmin ? 'Code purchase successful' : 'Pending'}
-          </h1>
+          <h1 className="font-display font-extrabold text-2xl text-slate-900 mb-2">Verification sent successfully</h1>
           <p className="text-slate-500 text-sm max-w-md mx-auto">
-            {isAdmin
-              ? 'Code purchase successful. The code has been sent to your email.'
-              : 'Your purchase request has been received. Your code will be sent to your email within 2–5 minutes.'}
+            Your account will be upgraded to Pro within 1 to 2 hours, once we've reviewed your payment to be sure
+            everything checks out. No further action is needed — we'll notify you as soon as it's confirmed.
           </p>
         </div>
       </div>
     );
   }
 
-  // MAIN FORM VIEW
   return (
     <div className="space-y-6 animate-fade-in">
       <button
-        onClick={onBack}
+        onClick={handleBack}
         className="flex items-center gap-1.5 text-sm font-semibold text-slate-500 hover:text-slate-700 transition-colors"
       >
         <ArrowLeft className="w-4 h-4" /> Back
       </button>
 
-      {!isAdmin && (
-        <div className="space-y-3">
-          <div className="bg-red-50 border border-red-100 text-red-600 rounded-2xl p-3.5 flex items-center justify-center gap-2 text-sm font-semibold">
-            <XCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
-            <span>Your Code: Not Purchased</span>
-          </div>
-
-          <div className="bg-red-50 border border-red-100 text-red-600 rounded-2xl p-3.5 flex items-center justify-center gap-2 text-sm font-semibold">
-            <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
-            <span>Valid DailyCash9ja code required for withdrawals</span>
-          </div>
-        </div>
-      )}
-
       <div>
         <h1 className="font-display font-extrabold text-2xl text-slate-900 mb-1">Confirm Your Payment</h1>
-        <p className="text-slate-500 text-sm">Tell us who sent the money and upload proof so we can process your exam code.</p>
+        <p className="text-slate-500 text-sm">Tell us who sent the money and upload proof so we can activate your Pro account.</p>
       </div>
 
       <form onSubmit={handleSubmit} className="bg-white rounded-2xl p-6 border border-slate-200 space-y-5">
@@ -237,9 +260,7 @@ export default function ConfirmPaymentPage({
         </div>
 
         <div>
-          <label className="text-sm font-semibold text-slate-700 mb-2 block">
-            Payment receipt / screenshot {!isAdmin && <span className="text-red-500">*</span>}
-          </label>
+          <label className="text-sm font-semibold text-slate-700 mb-2 block">Payment receipt / screenshot</label>
           {!file ? (
             <button
               type="button"
@@ -289,7 +310,7 @@ export default function ConfirmPaymentPage({
           className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 text-white font-bold text-sm hover:shadow-glow hover:scale-[1.01] active:scale-[0.99] transition-all disabled:opacity-70"
         >
           {actionLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle2 className="w-5 h-5" />}
-          {isAdmin ? 'Process Payment (Admin)' : 'Submit for Verification'}
+          Submit for Verification
         </button>
       </form>
     </div>
